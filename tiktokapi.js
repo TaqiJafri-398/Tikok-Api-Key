@@ -8,20 +8,28 @@ export default {
 
     try {
 
-      const reqUrl = new URL(req.url);
-      const input = reqUrl.searchParams.get("url");
-      const download = reqUrl.searchParams.get("download");
+      const requestUrl = new URL(req.url);
+      const input = requestUrl.searchParams.get("url");
+      const download = requestUrl.searchParams.get("download");
 
       if (!input) {
-        return json({ status:"error", message:"TikTok URL required" });
+        return json({status:"error", message:"TikTok URL required"});
       }
 
-      const cleaned = input.split("?")[0];
-      const resolved = await resolveShort(cleaned);
+      const clean = input.split("?")[0];
+      const resolved = await resolveShort(clean);
 
-      const html = await fetchTikTok(resolved);
+      const html = await fetchPage(resolved);
 
-      const data = extractData(html);
+      const match = html.match(
+        /<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/
+      );
+
+      if (!match) {
+        throw new Error("TikTok data not found");
+      }
+
+      const data = JSON.parse(match[1]);
 
       const itemModule = data.ItemModule;
       const id = Object.keys(itemModule)[0];
@@ -71,8 +79,6 @@ export default {
 
         title:item.desc,
 
-        region:item.region,
-
         duration:video.duration,
 
         cover:video.cover,
@@ -95,7 +101,7 @@ export default {
           play,
           wmplay,
           download:
-            `${reqUrl.origin}?url=${encodeURIComponent(resolved)}&download=1`
+          `${requestUrl.origin}?url=${encodeURIComponent(resolved)}&download=1`
         },
 
         slideshow: slideshow.length ? slideshow : null,
@@ -111,7 +117,9 @@ export default {
 
       });
 
-    } catch(err){
+    }
+
+    catch(err){
 
       return json({
         status:"error",
@@ -124,7 +132,6 @@ export default {
 };
 
 
-
 function json(data){
   return new Response(JSON.stringify(data,null,2),{
     headers:{
@@ -133,7 +140,6 @@ function json(data){
     }
   });
 }
-
 
 
 async function resolveShort(url){
@@ -157,42 +163,15 @@ async function resolveShort(url){
 }
 
 
-
-async function fetchTikTok(url){
+async function fetchPage(url){
 
   const res = await fetch(url,{
     headers:{
-      "user-agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
-      "accept-language":"en-US,en;q=0.9",
+      "user-agent":"Mozilla/5.0",
       "referer":"https://www.tiktok.com/"
     }
   });
 
   return await res.text();
-
-}
-
-
-
-function extractData(html){
-
-  const sigi = html.match(
-    /<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/
-  );
-
-  if(sigi){
-    return JSON.parse(sigi[1]);
-  }
-
-  const next = html.match(
-    /<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/
-  );
-
-  if(next){
-    const data = JSON.parse(next[1]);
-    return data.props.pageProps;
-  }
-
-  throw new Error("Unable to extract TikTok data");
 
 }
