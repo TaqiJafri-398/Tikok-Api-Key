@@ -16,22 +16,12 @@ export default {
         return json({ status:"error", message:"TikTok URL required" });
       }
 
-      const clean = normalize(input);
-      const resolved = await resolveShort(clean);
+      const cleaned = input.split("?")[0];
+      const resolved = await resolveShort(cleaned);
 
-      const html = await fetchPage(resolved);
+      const html = await fetchTikTok(resolved);
 
-      let data;
-
-      try {
-        data = parseSIGI(html);
-      } catch {
-        try {
-          data = parseNEXT(html);
-        } catch {
-          throw new Error("Unable to extract TikTok data");
-        }
-      }
+      const data = extractData(html);
 
       const itemModule = data.ItemModule;
       const id = Object.keys(itemModule)[0];
@@ -73,7 +63,7 @@ export default {
 
       }
 
-      const response = {
+      return json({
 
         status:"success",
 
@@ -98,8 +88,7 @@ export default {
           views:stats.playCount,
           likes:stats.diggCount,
           comments:stats.commentCount,
-          shares:stats.shareCount,
-          downloads:stats.downloadCount
+          shares:stats.shareCount
         },
 
         video: slideshow.length ? null : {
@@ -120,9 +109,7 @@ export default {
           cover:music.coverLarge
         }
 
-      };
-
-      return json(response);
+      });
 
     } catch(err){
 
@@ -139,21 +126,12 @@ export default {
 
 
 function json(data){
-  return new Response(
-    JSON.stringify(data,null,2),
-    {
-      headers:{
-        "content-type":"application/json",
-        "access-control-allow-origin":"*"
-      }
+  return new Response(JSON.stringify(data,null,2),{
+    headers:{
+      "content-type":"application/json",
+      "access-control-allow-origin":"*"
     }
-  );
-}
-
-
-
-function normalize(url){
-  return url.split("?")[0];
+  });
 }
 
 
@@ -175,46 +153,46 @@ async function resolveShort(url){
   }
 
   return url;
+
 }
 
 
 
-async function fetchPage(url){
+async function fetchTikTok(url){
 
   const res = await fetch(url,{
     headers:{
-      "user-agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
+      "user-agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+      "accept-language":"en-US,en;q=0.9",
       "referer":"https://www.tiktok.com/"
     }
   });
 
   return await res.text();
+
 }
 
 
 
-function parseSIGI(html){
+function extractData(html){
 
-  const match = html.match(
+  const sigi = html.match(
     /<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/
   );
 
-  if(!match) throw new Error("SIGI not found");
+  if(sigi){
+    return JSON.parse(sigi[1]);
+  }
 
-  return JSON.parse(match[1]);
-}
-
-
-
-function parseNEXT(html){
-
-  const match = html.match(
+  const next = html.match(
     /<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/
   );
 
-  if(!match) throw new Error("NEXT not found");
+  if(next){
+    const data = JSON.parse(next[1]);
+    return data.props.pageProps;
+  }
 
-  const data = JSON.parse(match[1]);
+  throw new Error("Unable to extract TikTok data");
 
-  return data.props.pageProps;
 }
