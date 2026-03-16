@@ -1,91 +1,85 @@
 export default {
-  async fetch(req) {
+  async fetch(request) {
 
     const headers = {
-      "content-type": "application/json",
-      "access-control-allow-origin": "*"
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*"
     };
+
+    const url = new URL(request.url);
+    const input = url.searchParams.get("url");
+
+    if (!input) {
+      return new Response(JSON.stringify({
+        status: "error",
+        message: "TikTok URL required"
+      }), { headers });
+    }
 
     try {
 
-      const url = new URL(req.url);
-      const input = url.searchParams.get("url");
+      const finalUrl = await resolveShortUrl(input);
 
-      if (!input) {
-        return new Response(JSON.stringify({
-          status: "error",
-          message: "TikTok URL required"
-        }), { headers });
-      }
-
-      // normalize link
-      const cleaned = cleanUrl(input);
-
-      // resolve vt/vm/t short links
-      const finalUrl = await resolveShort(cleaned);
-
-      // fetch tiktok page
       const page = await fetch(finalUrl, {
         headers: {
-          "user-agent":
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
-          "referer": "https://www.tiktok.com/"
+          "User-Agent": "Mozilla/5.0",
+          "Referer": "https://www.tiktok.com/"
         }
       });
 
       const html = await page.text();
 
-      const match = html.match(
+      const jsonMatch = html.match(
         /<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/
       );
 
-      if (!match) {
-        throw new Error("TikTok data not found");
-      }
+      if (!jsonMatch) throw new Error("TikTok data not found");
 
-      const json = JSON.parse(match[1]);
+      const data = JSON.parse(jsonMatch[1]);
 
-      const itemModule = json.ItemModule;
-      const id = Object.keys(itemModule)[0];
-      const item = itemModule[id];
+      const itemModule = data.ItemModule;
+      const itemId = Object.keys(itemModule)[0];
+      const item = itemModule[itemId];
 
       const video = item.video || {};
       const music = item.music || {};
-      const stats = item.stats || {};
+      const author = data.UserModule.users[item.author];
 
-      const author =
-        json.UserModule?.users?.[item.author] || {};
+      const images = item.imagePost?.images || [];
 
-      // slideshow
-      const images =
-        item.imagePost?.images?.map(
-          img => img.imageURL.urlList[0]
-        ) || [];
-
-      // video links
-      const play =
+      const videoPlay =
         video.playAddr ||
-        video.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0] ||
-        null;
-
-      const wmplay =
         video.downloadAddr ||
-        video.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0] ||
-        null;
+        video.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0];
+
+      const wmPlay =
+        video.downloadAddr ||
+        video.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0];
+
+      const slideshow =
+        images.map(img => img.imageURL.urlList[0]);
 
       const response = {
 
         status: "success",
 
-        id,
+        id: itemId,
 
         title: item.desc,
-
-        region: item.region,
 
         duration: video.duration,
 
         cover: video.cover,
+
+        region: item.region,
+
+        stats: {
+          views: item.stats.playCount,
+          likes: item.stats.diggCount,
+          comments: item.stats.commentCount,
+          shares: item.stats.shareCount,
+          downloads: item.stats.downloadCount
+        },
 
         author: {
           id: author.id,
@@ -94,34 +88,30 @@ export default {
           avatar: author.avatarMedium
         },
 
-        stats: {
-          views: stats.playCount,
-          likes: stats.diggCount,
-          comments: stats.commentCount,
-          shares: stats.shareCount
-        },
+        video: images.length
+          ? null
+          : {
+              play: videoPlay,
+              wmplay: wmPlay,
+              size: video.playAddrSize
+            },
 
-        video: images.length ? null : {
-          play,
-          wmplay
-        },
-
-        slideshow: images.length ? images : null,
+        slideshow: images.length
+          ? slideshow
+          : null,
 
         music: {
           id: music.id,
           title: music.title,
           author: music.authorName,
           play: music.playUrl,
+          duration: music.duration,
           cover: music.coverLarge
         }
 
       };
 
-      return new Response(
-        JSON.stringify(response, null, 2),
-        { headers }
-      );
+      return new Response(JSON.stringify(response, null, 2), { headers });
 
     } catch (err) {
 
@@ -136,31 +126,18 @@ export default {
 };
 
 
+/* ---------- HELPERS ---------- */
 
-/* ---------- FUNCTIONS ---------- */
+async function resolveShortUrl(url) {
 
-// remove query parameters
-function cleanUrl(url) {
-  return url.split("?")[0];
-}
+  if (url.includes("vt.tiktok.com") || url.includes("vm.tiktok.com")) {
 
-// resolve short links
-async function resolveShort(url) {
-
-  if (
-    url.includes("vt.tiktok.com") ||
-    url.includes("vm.tiktok.com") ||
-    url.includes("tiktok.com/t/")
-  ) {
-
-    const r = await fetch(url, {
+    const res = await fetch(url, {
       redirect: "follow",
-      headers: {
-        "user-agent": "Mozilla/5.0"
-      }
+      headers: { "User-Agent": "Mozilla/5.0" }
     });
 
-    return r.url;
+    return res.url;
   }
 
   return url;
