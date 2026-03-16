@@ -1,124 +1,135 @@
 export default {
-  async fetch(request) {
+  async fetch(req) {
 
     const headers = {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*"
+      "content-type": "application/json",
+      "access-control-allow-origin": "*"
     };
-
-    const url = new URL(request.url);
-    const input = url.searchParams.get("url");
-
-    if (!input) {
-      return new Response(JSON.stringify({
-        status: "error",
-        message: "TikTok URL required"
-      }), { headers });
-    }
 
     try {
 
-      const finalUrl = await resolveShortUrl(input);
+      const reqUrl = new URL(req.url);
+      const input = reqUrl.searchParams.get("url");
+      const download = reqUrl.searchParams.get("download");
 
-      const page = await fetch(finalUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          "Referer": "https://www.tiktok.com/"
+      if (!input) {
+        return json({ status:"error", message:"TikTok URL required" });
+      }
+
+      const clean = normalize(input);
+      const resolved = await resolveShort(clean);
+
+      const html = await fetchPage(resolved);
+
+      let data;
+
+      try {
+        data = parseSIGI(html);
+      } catch {
+        try {
+          data = parseNEXT(html);
+        } catch {
+          throw new Error("Unable to extract TikTok data");
         }
-      });
-
-      const html = await page.text();
-
-      const jsonMatch = html.match(
-        /<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/
-      );
-
-      if (!jsonMatch) throw new Error("TikTok data not found");
-
-      const data = JSON.parse(jsonMatch[1]);
+      }
 
       const itemModule = data.ItemModule;
-      const itemId = Object.keys(itemModule)[0];
-      const item = itemModule[itemId];
+      const id = Object.keys(itemModule)[0];
+      const item = itemModule[id];
 
       const video = item.video || {};
       const music = item.music || {};
-      const author = data.UserModule.users[item.author];
+      const stats = item.stats || {};
 
-      const images = item.imagePost?.images || [];
-
-      const videoPlay =
-        video.playAddr ||
-        video.downloadAddr ||
-        video.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0];
-
-      const wmPlay =
-        video.downloadAddr ||
-        video.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0];
+      const author =
+        data.UserModule?.users?.[item.author] || {};
 
       const slideshow =
-        images.map(img => img.imageURL.urlList[0]);
+        item.imagePost?.images?.map(
+          img => img.imageURL.urlList[0]
+        ) || [];
+
+      const play =
+        video.playAddr ||
+        video.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0] ||
+        null;
+
+      const wmplay =
+        video.downloadAddr ||
+        video.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0] ||
+        null;
+
+      if (download && play) {
+
+        const stream = await fetch(play);
+
+        return new Response(stream.body,{
+          headers:{
+            "content-type":"video/mp4",
+            "content-disposition":`attachment; filename=tiktok_${id}.mp4`,
+            "access-control-allow-origin":"*"
+          }
+        });
+
+      }
 
       const response = {
 
-        status: "success",
+        status:"success",
 
-        id: itemId,
+        id,
 
-        title: item.desc,
+        title:item.desc,
 
-        duration: video.duration,
+        region:item.region,
 
-        cover: video.cover,
+        duration:video.duration,
 
-        region: item.region,
+        cover:video.cover,
 
-        stats: {
-          views: item.stats.playCount,
-          likes: item.stats.diggCount,
-          comments: item.stats.commentCount,
-          shares: item.stats.shareCount,
-          downloads: item.stats.downloadCount
+        author:{
+          id:author.id,
+          username:author.uniqueId,
+          nickname:author.nickname,
+          avatar:author.avatarMedium
         },
 
-        author: {
-          id: author.id,
-          username: author.uniqueId,
-          nickname: author.nickname,
-          avatar: author.avatarMedium
+        stats:{
+          views:stats.playCount,
+          likes:stats.diggCount,
+          comments:stats.commentCount,
+          shares:stats.shareCount,
+          downloads:stats.downloadCount
         },
 
-        video: images.length
-          ? null
-          : {
-              play: videoPlay,
-              wmplay: wmPlay,
-              size: video.playAddrSize
-            },
+        video: slideshow.length ? null : {
+          play,
+          wmplay,
+          download:
+            `${reqUrl.origin}?url=${encodeURIComponent(resolved)}&download=1`
+        },
 
-        slideshow: images.length
-          ? slideshow
-          : null,
+        slideshow: slideshow.length ? slideshow : null,
 
-        music: {
-          id: music.id,
-          title: music.title,
-          author: music.authorName,
-          play: music.playUrl,
-          duration: music.duration,
-          cover: music.coverLarge
+        music:{
+          id:music.id,
+          title:music.title,
+          author:music.authorName,
+          play:music.playUrl,
+          duration:music.duration,
+          cover:music.coverLarge
         }
 
       };
 
-      return new Response(JSON.stringify(response, null, 2), { headers });
+      return json(response);
 
-    } catch (err) {
+    } catch(err){
 
-      return new Response(JSON.stringify({
-        status: "error",
-        message: err.message
-      }), { headers });
+      return json({
+        status:"error",
+        message:err.message
+      });
 
     }
 
@@ -126,20 +137,84 @@ export default {
 };
 
 
-/* ---------- HELPERS ---------- */
 
-async function resolveShortUrl(url) {
+function json(data){
+  return new Response(
+    JSON.stringify(data,null,2),
+    {
+      headers:{
+        "content-type":"application/json",
+        "access-control-allow-origin":"*"
+      }
+    }
+  );
+}
 
-  if (url.includes("vt.tiktok.com") || url.includes("vm.tiktok.com")) {
 
-    const res = await fetch(url, {
-      redirect: "follow",
-      headers: { "User-Agent": "Mozilla/5.0" }
+
+function normalize(url){
+  return url.split("?")[0];
+}
+
+
+
+async function resolveShort(url){
+
+  if(
+    url.includes("vt.tiktok.com") ||
+    url.includes("vm.tiktok.com") ||
+    url.includes("tiktok.com/t/")
+  ){
+
+    const r = await fetch(url,{
+      redirect:"follow",
+      headers:{ "user-agent":"Mozilla/5.0" }
     });
 
-    return res.url;
+    return r.url;
   }
 
   return url;
+}
 
+
+
+async function fetchPage(url){
+
+  const res = await fetch(url,{
+    headers:{
+      "user-agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
+      "referer":"https://www.tiktok.com/"
+    }
+  });
+
+  return await res.text();
+}
+
+
+
+function parseSIGI(html){
+
+  const match = html.match(
+    /<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/
+  );
+
+  if(!match) throw new Error("SIGI not found");
+
+  return JSON.parse(match[1]);
+}
+
+
+
+function parseNEXT(html){
+
+  const match = html.match(
+    /<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/
+  );
+
+  if(!match) throw new Error("NEXT not found");
+
+  const data = JSON.parse(match[1]);
+
+  return data.props.pageProps;
 }
