@@ -101,11 +101,15 @@ export default {
 
       } else {
 
+        // ✅ FIX: ensure download link always exists
+        const playUrl = video.playAddr || "";
+        const downloadUrl = video.downloadAddr || playUrl;
+
         result.video = {
           cover: video.cover,
           dynamicCover: video.dynamicCover,
-          download: video.downloadAddr,
-          play: video.playAddr,
+          play: playUrl,
+          download: downloadUrl,
           bitrate: video.bitrate
         };
 
