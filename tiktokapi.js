@@ -10,7 +10,6 @@ export default {
 
       const url = new URL(req.url);
       const input = url.searchParams.get("url");
-      const download = url.searchParams.get("download");
 
       if (!input) {
         return new Response(JSON.stringify({
@@ -19,12 +18,32 @@ export default {
         }), { headers });
       }
 
+      // normalize link
       const cleaned = cleanUrl(input);
+
+      // resolve vt/vm/t short links
       const finalUrl = await resolveShort(cleaned);
 
-      const html = await fetchPage(finalUrl);
+      // fetch tiktok page
+      const page = await fetch(finalUrl, {
+        headers: {
+          "user-agent":
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
+          "referer": "https://www.tiktok.com/"
+        }
+      });
 
-      const json = extractSIGI(html);
+      const html = await page.text();
+
+      const match = html.match(
+        /<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/
+      );
+
+      if (!match) {
+        throw new Error("TikTok data not found");
+      }
+
+      const json = JSON.parse(match[1]);
 
       const itemModule = json.ItemModule;
       const id = Object.keys(itemModule)[0];
@@ -33,14 +52,17 @@ export default {
       const video = item.video || {};
       const music = item.music || {};
       const stats = item.stats || {};
+
       const author =
         json.UserModule?.users?.[item.author] || {};
 
+      // slideshow
       const images =
         item.imagePost?.images?.map(
-          i => i.imageURL.urlList[0]
+          img => img.imageURL.urlList[0]
         ) || [];
 
+      // video links
       const play =
         video.playAddr ||
         video.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0] ||
@@ -50,22 +72,6 @@ export default {
         video.downloadAddr ||
         video.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0] ||
         null;
-
-      // STREAM DOWNLOAD
-      if (download && play) {
-
-        const videoStream = await fetch(play);
-
-        return new Response(videoStream.body, {
-          headers: {
-            "content-type": "video/mp4",
-            "content-disposition":
-              `attachment; filename=tiktok_${id}.mp4`,
-            "access-control-allow-origin": "*"
-          }
-        });
-
-      }
 
       const response = {
 
@@ -92,15 +98,12 @@ export default {
           views: stats.playCount,
           likes: stats.diggCount,
           comments: stats.commentCount,
-          shares: stats.shareCount,
-          downloads: stats.downloadCount
+          shares: stats.shareCount
         },
 
         video: images.length ? null : {
           play,
-          wmplay,
-          download:
-            `${url.origin}?url=${encodeURIComponent(finalUrl)}&download=1`
+          wmplay
         },
 
         slideshow: images.length ? images : null,
@@ -110,7 +113,6 @@ export default {
           title: music.title,
           author: music.authorName,
           play: music.playUrl,
-          duration: music.duration,
           cover: music.coverLarge
         }
 
@@ -135,13 +137,14 @@ export default {
 
 
 
-/* -------- FUNCTIONS -------- */
+/* ---------- FUNCTIONS ---------- */
 
+// remove query parameters
 function cleanUrl(url) {
   return url.split("?")[0];
 }
 
-
+// resolve short links
 async function resolveShort(url) {
 
   if (
@@ -152,39 +155,14 @@ async function resolveShort(url) {
 
     const r = await fetch(url, {
       redirect: "follow",
-      headers: { "user-agent": "Mozilla/5.0" }
+      headers: {
+        "user-agent": "Mozilla/5.0"
+      }
     });
 
     return r.url;
   }
 
   return url;
-}
 
-
-async function fetchPage(url) {
-
-  const res = await fetch(url, {
-    headers: {
-      "user-agent":
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
-      "referer": "https://www.tiktok.com/"
-    }
-  });
-
-  return await res.text();
-}
-
-
-function extractSIGI(html) {
-
-  const match = html.match(
-    /<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/
-  );
-
-  if (!match) {
-    throw new Error("TikTok data not found");
-  }
-
-  return JSON.parse(match[1]);
 }
